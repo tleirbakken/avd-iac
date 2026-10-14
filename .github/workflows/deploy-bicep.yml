@@ -57,12 +57,15 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # ProviderNoRbac: full validering mot resource providers, men RBAC sjekkes kun for lesing.
+      # Uten dette krever preflight skrivetilgang, og plan-identiteten er bevisst read-only.
       - name: Preflight-validering
         run: |
           az deployment sub validate \
             --name "plan-$GITHUB_RUN_ID" \
             --location "$LOCATION" \
             --parameters "$PARAMS" \
+            --validation-level ProviderNoRbac \
             --output none
 
       - name: What-if
@@ -72,6 +75,7 @@ jobs:
             --name "plan-$GITHUB_RUN_ID" \
             --location "$LOCATION" \
             --parameters "$PARAMS" \
+            --validation-level ProviderNoRbac \
             2>&1 | sed -r 's/\x1B\[[0-9;]*[mK]//g' | tee whatif.txt
           { echo '## What-if (dev)'; echo '```'; cat whatif.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 

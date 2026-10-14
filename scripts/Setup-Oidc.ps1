@@ -53,6 +53,11 @@ if ($repoName -cne $GitHubRepo) {
 }
 Write-Host "GitHub: $repoName"
 
+# GitHub sender subject med uforanderlige ID-er: repo:<owner>@<ownerId>/<repo>@<repoId>:environment:<env>
+# (beskytter mot at et slettet repo gjenopprettes med samme navn og arver tilliten)
+$subjectRepo = gh api "repos/$GitHubRepo" --jq '"\(.owner.login)@\(.owner.id)/\(.name)@\(.id)"'
+Write-Host "Subject-prefiks: repo:$subjectRepo"
+
 # -----------------------------------------------------------------------------
 Write-Step 'Managed identities og federated credentials'
 az group create -n $IdentityResourceGroup -l $Location --tags Workload=avd-iac ManagedBy=Setup-Oidc -o none
@@ -64,11 +69,17 @@ foreach ($envName in $identities.Keys) {
     $result[$envName] = $mi
 
     $ficName = "gh-$envName"
-    $subject = "repo:${GitHubRepo}:environment:$envName"
-    $exists  = az identity federated-credential list --identity-name $miName -g $IdentityResourceGroup `
-                 --query "length([?name=='$ficName'])" -o tsv
-    if ($exists -eq '0') {
+    $subject = "repo:${subjectRepo}:environment:$envName"
+    # Ingen parenteser i --query: az.cmd (cmd.exe) feiltolker dem på Windows
+    $current = az identity federated-credential list --identity-name $miName -g $IdentityResourceGroup `
+                 --query "[?name=='$ficName'].subject" -o tsv
+    if (-not $current) {
         az identity federated-credential create -n $ficName --identity-name $miName -g $IdentityResourceGroup `
+            --issuer $issuer --subject $subject --audiences 'api://AzureADTokenExchange' -o none
+    }
+    elseif ($current -cne $subject) {
+        Write-Host "  $ficName har feil subject ($current) – oppdaterer" -ForegroundColor Yellow
+        az identity federated-credential update -n $ficName --identity-name $miName -g $IdentityResourceGroup `
             --issuer $issuer --subject $subject --audiences 'api://AzureADTokenExchange' -o none
     }
     Write-Host ("  {0,-20} clientId={1}" -f $miName, $mi.clientId)
@@ -77,8 +88,8 @@ foreach ($envName in $identities.Keys) {
 
 # -----------------------------------------------------------------------------
 Write-Step 'Custom role for what-if'
-$roleExists = az role definition list --name $whatIfRoleName --custom-role-only true --query 'length(@)' -o tsv
-if ($roleExists -eq '0') {
+$roleExists = az role definition list --name $whatIfRoleName --custom-role-only true --query '[].roleName' -o tsv
+if (-not $roleExists) {
     $def = @{
         Name             = $whatIfRoleName
         Description      = 'Lese og kjøre validate/what-if. Kan ikke endre ressurser.'
@@ -109,8 +120,8 @@ Write-Step 'Rolletildelinger'
 function Grant-Role([string]$PrincipalId, [string]$Role, [string]$Label) {
     for ($i = 1; $i -le 8; $i++) {
         try {
-            $count = az role assignment list --assignee $PrincipalId --role $Role --scope $scope --query 'length(@)' -o tsv
-            if ($count -ne '0') { Write-Host "  $Label har '$Role'"; return }
+            $existing = az role assignment list --assignee $PrincipalId --role $Role --scope $scope --query '[].id' -o tsv
+            if ($existing) { Write-Host "  $Label har '$Role'"; return }
             az role assignment create --assignee-object-id $PrincipalId --assignee-principal-type ServicePrincipal `
                 --role $Role --scope $scope -o none
             Write-Host "  $Label → '$Role'"
