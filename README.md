@@ -11,6 +11,11 @@ Bicep + GitHub Actions for Azure-infrastruktur. Fundament for AVD-plattformen ti
 
 Innlogging skjer via OIDC (federated credentials). Det finnes ingen secrets i repoet eller i GitHub.
 
+## Dokumentasjon
+
+- [docs/runbook.md](docs/runbook.md) – oppsett steg for steg, med feilsøking
+- [docs/okt-2026-10-14.md](docs/okt-2026-10-14.md) – logg fra første gjennomkjøring: feil, årsaker og spørsmål/svar
+
 ## Lokalt
 
 ```powershell
