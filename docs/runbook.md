@@ -192,7 +192,7 @@ Les gjennom `scripts/Setup-Oidc.ps1` først. Den er idempotent, så du kan kjør
 |---|---|---|
 | 1 | Oppretter `rg-avd-iac-identity` | Azure |
 | 2 | Oppretter `id-gh-avd-iac-plan` og `id-gh-avd-iac-dev` (user-assigned MI) | Azure |
-| 3 | Federated credential på hver: `repo:<org>/<repo>:environment:dev-plan` og `...:environment:dev` | Azure |
+| 3 | Federated credential på hver: `repo:<org>@<orgId>/<repo>@<repoId>:environment:dev-plan` og `...:environment:dev` (ID-ene hentes fra `gh api`) | Azure |
 | 4 | Custom role *Bicep What-If Operator - avd-iac* (`*/read`, `validate`, `whatIf`) | Azure |
 | 5 | plan → custom role, dev → Contributor, begge på subscription | Azure |
 | 6 | Environments `dev-plan` (åpen) og `dev` (kun `main`) | GitHub |
@@ -322,9 +322,11 @@ Taggen `Owner: torgeir` skal finnes på RG-en.
 | Feilmelding / symptom | Årsak | Løsning |
 |---|---|---|
 | `AADSTS700213: No matching federated identity record found for presented assertion subject 'repo:X/Y:environment:dev-plan'` | Subject i FIC matcher ikke det GitHub sender. Org/repo er **case-sensitivt**. | Sammenlign med `az identity federated-credential list --identity-name id-gh-avd-iac-plan -g rg-avd-iac-identity --query "[].subject"`. Kjør `Setup-Oidc.ps1` på nytt med riktig `-GitHubRepo`. |
+| `AADSTS700213 ... subject 'repo:X@12345/Y@67890:environment:...'` | GitHub sender subject med uforanderlige ID-er for eier og repo (beskytter mot at et slettet repo gjenopprettes med samme navn). FIC laget med `repo:X/Y:...` matcher ikke. | `Setup-Oidc.ps1` bygger subject fra `gh api repos/X/Y` og oppdaterer eksisterende FIC. Kjør scriptet på nytt. Eksakt subject står i `azure/login`-loggen under *subject claim*. |
 | `AADSTS700213 ... subject 'repo:X/Y:pull_request'` eller `...:ref:refs/heads/...` | Jobben mangler `environment:` | Alle jobber som logger inn må ha `environment:` satt |
 | `No subscriptions found for ...` i azure/login | RBAC er ikke propagert | Vent 5 minutter, *Re-run failed jobs* |
-| What-if: `AuthorizationFailed ... does not have authorization to perform action 'X'` | Custom role mangler en action | Legg action `X` til i `Actions`-lista i `Setup-Oidc.ps1`, oppdater rollen (`az role definition update --role-definition "@fil.json"`), og noter den. Den må inn i AVD-bootstrapen senere. **Ikke** gi plan-identiteten Contributor. |
+| Preflight/what-if: `AuthorizationFailed ... perform action '.../write'` på ressursene i malen | Standard `validation-level` (`Provider`) krever skrive-RBAC for alle ressurser i malen. Plan-identiteten er bevisst read-only. | Bruk `--validation-level ProviderNoRbac` på `validate` og `what-if` i Plan-jobben (allerede i workflowen). Da sjekkes kun lese-RBAC. **Ikke** legg write-actions i custom role. |
+| What-if: `AuthorizationFailed ... does not have authorization to perform action 'X'` (ikke write) | Custom role mangler en lese-/validerings-action | Legg action `X` til i `Actions`-lista i `Setup-Oidc.ps1`, oppdater rollen (`az role definition update --role-definition "@fil.json"`), og noter den. Den må inn i AVD-bootstrapen senere. **Ikke** gi plan-identiteten Contributor. |
 | Preflight: `StorageAccountAlreadyTaken` | Navnet er tatt globalt (svært usannsynlig med `uniqueString`) | Endre `workload` i `main.bicep` |
 | Preflight/deploy: `RequestDisallowedByPolicy` | Tenant-policy (ALZ) nekter noe | Policy-navnet står i feilen. Tilpass modulen, eller be om unntak for test-sub. |
 | Preflight feiler på nested deployment til RG som ikke finnes | Første kjøring, før RG-en finnes | Sjelden for subscription-scope. Hvis det skjer: fjern `Preflight-validering`-steget midlertidig, deploy én gang, og legg det tilbake. |
@@ -333,7 +335,7 @@ Taggen `Owner: torgeir` skal finnes på RG-en.
 | PR-kommentar: `Resource not accessible by integration` (403) | Org begrenser `GITHUB_TOKEN` | Se steg 7, eller slett kommentar-steget |
 | PR blir stående på *Expected — Waiting for status to be reported* | Required check-navn matcher ikke jobbnavn | Navnene skal være eksakt `Validate` og `What-if` |
 | `az role definition create`: *role with the same name already exists* | Custom role finnes i en annen subscription i tenanten | Endre `$whatIfRoleName` i scriptet |
-| Windows: `'length' is not recognized` | Pipe-tegnet i JMESPath tolkes av `az.cmd` | Scriptet bruker `length([...])` uten pipe. Skriv egne `--query` på samme måte. |
+| Windows: `'length' is not recognized` eller `-o was unexpected at this time` | `az` er en batch-fil (`az.cmd`). PowerShell 7 sender `--query` uten anførselstegn når verdien ikke har mellomrom, og cmd.exe tolker da pipe **og parenteser** selv. | Unngå `\|` og `( )` i `--query`. Hent lista (`"[?name=='x'].name"`) og sjekk om resultatet er tomt i PowerShell (`if (-not $r)`). |
 
 ---
 
@@ -349,6 +351,8 @@ Taggen `Owner: torgeir` skal finnes på RG-en.
 ## Vedlegg A – filer
 
 Opprett nøyaktig disse filene (steg 3). Alle er bygget og lintet uten feil eller varsler (Bicep 0.48). Workflowen er sjekket med actionlint, og PowerShell-scriptet er syntakssjekket.
+
+> **Merk (2026-10-14):** Vedlegget viser utgangspunktet. Filene i repoet er fasit. Etter første gjennomkjøring er disse rettet: `Setup-Oidc.ps1` (az.cmd-quoting og subject med ID-er), `deploy-bicep.yml` (`ProviderNoRbac` og action-versjoner for Node 24). Se [Feilsøking](#feilsøking).
 
 ### `CLAUDE.md`
 
