@@ -65,9 +65,10 @@ foreach ($envName in $identities.Keys) {
 
     $ficName = "gh-$envName"
     $subject = "repo:${GitHubRepo}:environment:$envName"
+    # Ingen parenteser i --query: az.cmd (cmd.exe) feiltolker dem på Windows
     $exists  = az identity federated-credential list --identity-name $miName -g $IdentityResourceGroup `
-                 --query "length([?name=='$ficName'])" -o tsv
-    if ($exists -eq '0') {
+                 --query "[?name=='$ficName'].name" -o tsv
+    if (-not $exists) {
         az identity federated-credential create -n $ficName --identity-name $miName -g $IdentityResourceGroup `
             --issuer $issuer --subject $subject --audiences 'api://AzureADTokenExchange' -o none
     }
@@ -77,8 +78,8 @@ foreach ($envName in $identities.Keys) {
 
 # -----------------------------------------------------------------------------
 Write-Step 'Custom role for what-if'
-$roleExists = az role definition list --name $whatIfRoleName --custom-role-only true --query 'length(@)' -o tsv
-if ($roleExists -eq '0') {
+$roleExists = az role definition list --name $whatIfRoleName --custom-role-only true --query '[].roleName' -o tsv
+if (-not $roleExists) {
     $def = @{
         Name             = $whatIfRoleName
         Description      = 'Lese og kjøre validate/what-if. Kan ikke endre ressurser.'
@@ -109,8 +110,8 @@ Write-Step 'Rolletildelinger'
 function Grant-Role([string]$PrincipalId, [string]$Role, [string]$Label) {
     for ($i = 1; $i -le 8; $i++) {
         try {
-            $count = az role assignment list --assignee $PrincipalId --role $Role --scope $scope --query 'length(@)' -o tsv
-            if ($count -ne '0') { Write-Host "  $Label har '$Role'"; return }
+            $existing = az role assignment list --assignee $PrincipalId --role $Role --scope $scope --query '[].id' -o tsv
+            if ($existing) { Write-Host "  $Label har '$Role'"; return }
             az role assignment create --assignee-object-id $PrincipalId --assignee-principal-type ServicePrincipal `
                 --role $Role --scope $scope -o none
             Write-Host "  $Label → '$Role'"

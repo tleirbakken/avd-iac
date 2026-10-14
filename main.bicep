@@ -14,6 +14,7 @@ var tags = {
   Environment: environment
   ManagedBy: 'Bicep'
   Repo: 'avd-iac'
+  Owner: 'torgeir'
 }
 
 resource rg 'Microsoft.Resources/resourceGroups@2025-04-01' = {
