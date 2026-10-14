@@ -53,6 +53,11 @@ if ($repoName -cne $GitHubRepo) {
 }
 Write-Host "GitHub: $repoName"
 
+# GitHub sender subject med uforanderlige ID-er: repo:<owner>@<ownerId>/<repo>@<repoId>:environment:<env>
+# (beskytter mot at et slettet repo gjenopprettes med samme navn og arver tilliten)
+$subjectRepo = gh api "repos/$GitHubRepo" --jq '"\(.owner.login)@\(.owner.id)/\(.name)@\(.id)"'
+Write-Host "Subject-prefiks: repo:$subjectRepo"
+
 # -----------------------------------------------------------------------------
 Write-Step 'Managed identities og federated credentials'
 az group create -n $IdentityResourceGroup -l $Location --tags Workload=avd-iac ManagedBy=Setup-Oidc -o none
@@ -64,12 +69,17 @@ foreach ($envName in $identities.Keys) {
     $result[$envName] = $mi
 
     $ficName = "gh-$envName"
-    $subject = "repo:${GitHubRepo}:environment:$envName"
+    $subject = "repo:${subjectRepo}:environment:$envName"
     # Ingen parenteser i --query: az.cmd (cmd.exe) feiltolker dem på Windows
-    $exists  = az identity federated-credential list --identity-name $miName -g $IdentityResourceGroup `
-                 --query "[?name=='$ficName'].name" -o tsv
-    if (-not $exists) {
+    $current = az identity federated-credential list --identity-name $miName -g $IdentityResourceGroup `
+                 --query "[?name=='$ficName'].subject" -o tsv
+    if (-not $current) {
         az identity federated-credential create -n $ficName --identity-name $miName -g $IdentityResourceGroup `
+            --issuer $issuer --subject $subject --audiences 'api://AzureADTokenExchange' -o none
+    }
+    elseif ($current -cne $subject) {
+        Write-Host "  $ficName har feil subject ($current) – oppdaterer" -ForegroundColor Yellow
+        az identity federated-credential update -n $ficName --identity-name $miName -g $IdentityResourceGroup `
             --issuer $issuer --subject $subject --audiences 'api://AzureADTokenExchange' -o none
     }
     Write-Host ("  {0,-20} clientId={1}" -f $miName, $mi.clientId)
