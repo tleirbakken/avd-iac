@@ -258,6 +258,8 @@ gh pr checks --watch
 - PR-en har en kommentar **"What-if (dev)"** som viser `+ Create` på RG og Storage Account
 - **Deploy dev** vises ikke eller er hoppet over. Riktig, siden PR-er aldri deployer.
 
+> **Merk:** PR-en viser *«This branch was successfully deployed»*. Det betyr **ikke** at noe er deployet til Azure. GitHub registrerer hver jobb med `environment:` som en «deployment». Her er det What-if-jobben mot `dev-plan`.
+
 ---
 
 ## 9. Branch-ruleset 🌐 GITHUB
@@ -270,22 +272,33 @@ Status checks kan først velges etter at de har kjørt én gang. Derfor gjøres 
 |---|---|
 | Ruleset name | `protect-main` |
 | Enforcement status | **Active** |
-| Bypass list | Tom (eller *Repository admin* for nødstilfeller) |
+| Bypass list | **Tom.** Legger du til *Repository admin*, slipper du selv forbi alle regler (du er admin på eget repo). |
 | Target branches | **Add target → Include default branch** |
 | ☑ Restrict deletions | på |
 | ☑ Require a pull request before merging | på. *Required approvals*: `0` alene, `1` hvis dere er to |
-| ☑ Require status checks to pass | på. **Add checks:** `Validate` og `What-if`. ☑ *Require branches to be up to date* |
+| ☑ Require status checks to pass | på. **Add checks:** `Validate` og `What-if` (velg navnet uten `Bicep CI/CD/`-prefiks, source *GitHub Actions*). ☑ *Require branches to be up to date* |
 | ☑ Block force pushes | på |
 
 **Create.**
 
 ✅ **SJEKK:** `git push origin main` direkte fra en lokal endring skal nå avvises.
 
+```powershell
+git checkout main
+git commit --allow-empty -m "test: direkte push skal avvises"
+git push origin main          # forventet: GH013 ... ! [remote rejected]
+git reset --hard origin/main  # fjern den lokale test-commiten
+```
+
+Står det *«Bypassed rule violations»* og pushen går gjennom, er du på bypass-lista. Fjern den i rulesetet og test på nytt. Den tomme commiten som slapp gjennom, er ufarlig (ingen filer, paths-filteret trigger ingen kjøring) og kan bli liggende.
+
 ---
 
 ## 10. Merge og deploy 🌐 GITHUB + 🖥️ TERMINAL
 
-🌐 På PR-en: **Squash and merge → Confirm**, og deretter **Delete branch**.
+🌐 Står det *«This branch is out-of-date with the base branch»* på PR-en (f.eks. etter testcommiten i steg 9), klikk **Update branch** og vent på grønne checks. Alternativt: `gh pr update-branch <branch>`.
+
+🌐 På PR-en: **pila ▾ ved Merge pull request → Squash and merge → Confirm**, og deretter **Delete branch**.
 
 🖥️
 ```powershell
@@ -311,7 +324,9 @@ Taggen `Owner: torgeir` skal finnes på RG-en.
 
 **Actions → Bicep CI/CD → Run workflow → main → Run workflow**
 
-✅ **SJEKK:** What-if viser kun `= NoChange` (eventuelt `* Ignore`), og Deploy dev er grønn uten endringer.
+Eller fra terminalen: `gh workflow run "Bicep CI/CD" --ref main` og `gh run watch`.
+
+✅ **SJEKK:** What-if viser kun `= NoChange` (eventuelt `* Ignore`), og Deploy dev er grønn uten endringer. What-if-outputen ligger i kjøringens **Summary** under «What-if (dev)».
 
 🎉 **Ferdig.** Kryss av sjekklisten øverst.
 
@@ -335,6 +350,9 @@ Taggen `Owner: torgeir` skal finnes på RG-en.
 | PR-kommentar: `Resource not accessible by integration` (403) | Org begrenser `GITHUB_TOKEN` | Se steg 7, eller slett kommentar-steget |
 | PR blir stående på *Expected — Waiting for status to be reported* | Required check-navn matcher ikke jobbnavn | Navnene skal være eksakt `Validate` og `What-if` |
 | `az role definition create`: *role with the same name already exists* | Custom role finnes i en annen subscription i tenanten | Endre `$whatIfRoleName` i scriptet |
+| `git push`: *Bypassed rule violations* – push til `main` går gjennom | Du står på rulesetets bypass-liste | Fjern *Repository admin* fra Bypass list i `protect-main` |
+| `git push -u origin <branch>`: *src refspec <branch> does not match any* | Branchen ble aldri laget (`git checkout -b` feilet/ble hoppet over), så commiten havnet på lokal `main` | `git branch <branch>` → `git reset --hard origin/main` → `git checkout <branch>` → push på nytt |
+| Annotasjon: *Node.js 20 is deprecated* | Gamle major-versjoner av actions | Bruk `actions/checkout@v7` og `azure/login@v3` (Node 24) |
 | Windows: `'length' is not recognized` eller `-o was unexpected at this time` | `az` er en batch-fil (`az.cmd`). PowerShell 7 sender `--query` uten anførselstegn når verdien ikke har mellomrom, og cmd.exe tolker da pipe **og parenteser** selv. | Unngå `\|` og `( )` i `--query`. Hent lista (`"[?name=='x'].name"`) og sjekk om resultatet er tomt i PowerShell (`if (-not $r)`). |
 
 ---
