@@ -1,0 +1,15 @@
+# Bicep build-output
+main.json
+modules/*.json
+environments/*.json
+
+# Lokale filer
+*.local.bicepparam
+*.local.json
+.env
+
+# Editor/OS
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db

@@ -1,0 +1,110 @@
+name: Bicep CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+    # Ingen paths-filter på PR: required status checks blir ellers hengende som "pending"
+  push:
+    branches: [main]
+    paths:
+      - 'main.bicep'
+      - 'modules/**'
+      - 'environments/**'
+      - 'bicepconfig.json'
+      - '.github/workflows/deploy-bicep.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bicep-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  LOCATION: norwayeast
+  PARAMS: environments/dev.bicepparam
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bicep lint, build og build-params
+        run: |
+          az bicep install
+          az bicep lint --file main.bicep
+          az bicep build --file main.bicep --stdout > /dev/null
+          az bicep build-params --file "$PARAMS" --stdout > /dev/null
+
+  plan:
+    name: What-if
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: dev-plan          # read-only identitet
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Preflight-validering
+        run: |
+          az deployment sub validate \
+            --name "plan-$GITHUB_RUN_ID" \
+            --location "$LOCATION" \
+            --parameters "$PARAMS" \
+            --output none
+
+      - name: What-if
+        run: |
+          set -o pipefail
+          az deployment sub what-if \
+            --name "plan-$GITHUB_RUN_ID" \
+            --location "$LOCATION" \
+            --parameters "$PARAMS" \
+            2>&1 | sed -r 's/\x1B\[[0-9;]*[mK]//g' | tee whatif.txt
+          { echo '## What-if (dev)'; echo '```'; cat whatif.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: What-if som PR-kommentar
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          { echo '### What-if (dev)'; echo '```'; head -c 60000 whatif.txt; echo '```'; } > comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
+
+  deploy:
+    name: Deploy dev
+    needs: plan
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: dev               # kun main, Contributor-identitet
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy
+        run: |
+          az deployment sub create \
+            --name "deploy-$GITHUB_RUN_ID" \
+            --location "$LOCATION" \
+            --parameters "$PARAMS" \
+            --query properties.outputs -o json
