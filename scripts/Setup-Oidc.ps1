@@ -13,6 +13,7 @@
 
 .EXAMPLE
     ./scripts/Setup-Oidc.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -GitHubRepo norva24/avd-iac
+    ./scripts/Setup-Oidc.ps1 -SubscriptionId <guid> -GitHubRepo <org>/avd-iac -GitHubHost norva24-group.ghe.com
 #>
 [CmdletBinding()]
 param(
@@ -23,15 +24,21 @@ param(
     [string]$GitHubRepo,                       # "org/repo" – case-sensitivt i FIC-subject
 
     [string]$Location = 'norwayeast',
-    [string]$IdentityResourceGroup = 'rg-avd-iac-identity'
+    [string]$IdentityResourceGroup = 'rg-avd-iac-identity',
+    [string]$GitHubHost = 'github.com'         # GHE.com: f.eks. norva24-group.ghe.com
 )
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true   # PS 7.3+: feil i az/gh stopper scriptet
 
-$issuer         = 'https://token.actions.githubusercontent.com'
+# gh-kommandoene i scriptet skal gå til riktig GitHub-instans
+$env:GH_HOST    = $GitHubHost
+
+# Hvem Azure skal godta tokens fra: github.com og GHE.com har ulik issuer
+$issuer         = if ($GitHubHost -eq 'github.com') { 'https://token.actions.githubusercontent.com' }
+                  else { "https://token.actions.$GitHubHost" }
 $scope          = "/subscriptions/$SubscriptionId"
-$whatIfRoleName = 'Bicep What-If Operator - avd-iac'
+$whatIfRoleName = 'Bicep What-If Operator - avd-iac'                  
 
 # environment-navn i GitHub → navn på managed identity i Azure
 $identities = [ordered]@{
@@ -72,13 +79,13 @@ foreach ($envName in $identities.Keys) {
     $subject = "repo:${subjectRepo}:environment:$envName"
     # Ingen parenteser i --query: az.cmd (cmd.exe) feiltolker dem på Windows
     $current = az identity federated-credential list --identity-name $miName -g $IdentityResourceGroup `
-                 --query "[?name=='$ficName'].subject" -o tsv
+                 --query "[?name=='$ficName'].[subject,issuer]" -o tsv
     if (-not $current) {
         az identity federated-credential create -n $ficName --identity-name $miName -g $IdentityResourceGroup `
             --issuer $issuer --subject $subject --audiences 'api://AzureADTokenExchange' -o none
     }
-    elseif ($current -cne $subject) {
-        Write-Host "  $ficName har feil subject ($current) – oppdaterer" -ForegroundColor Yellow
+    elseif ($current -cne "$subject`t$issuer") {
+        Write-Host "  $ficName har feil subject/issuer ($current) – oppdaterer" -ForegroundColor Yellow
         az identity federated-credential update -n $ficName --identity-name $miName -g $IdentityResourceGroup `
             --issuer $issuer --subject $subject --audiences 'api://AzureADTokenExchange' -o none
     }
